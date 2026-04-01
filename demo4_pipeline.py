@@ -57,6 +57,10 @@ def on_message(client, userdata, msg):
 
         data = json.loads(payload)
 
+        # Skip scalar payloads (e.g. retained numeric values from public brokers)
+        if not isinstance(data, dict):
+            return
+
         # Key by city/station for deduplication
         key = data.get("station_id") or data.get("city") or msg.topic
         data["_topic"]    = msg.topic

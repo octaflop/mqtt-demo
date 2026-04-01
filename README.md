@@ -2,6 +2,8 @@
 
 A hands-on demo for the Python meetup. We'll go from "what is MQTT?" to a live multi-source weather dashboard in four progressive steps.
 
+![img.png](img.png)
+
 ---
 
 ## What We're Building
@@ -31,14 +33,20 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` and add your [OpenWeatherMap API key](https://openweathermap.org/api) (free tier is fine):
+Edit `.env` and add your [OpenWeatherMap API key](https://openweathermap.org/api) (free tier, takes ~2 hrs to activate after signup):
 
 ```env
 OPENWEATHER_API_KEY=your_key_here
-MQTT_BROKER=test.mosquitto.org
+MQTT_BROKER=localhost        # local broker for Demo 2–4
 MQTT_PORT=1883
 MQTT_TOPIC_PREFIX=meetup/weather
 ```
+
+> **Inline override (no `.env` edit needed):**
+> Prefix any command with env vars to override for that run only:
+> ```bash
+> MQTT_BROKER=test.mosquitto.org uv run demo2_cloud_weather.py
+> ```
 
 ---
 
@@ -58,10 +66,13 @@ uv run demo1_hello_mqtt.py --mode publish
 
 Watch Terminal 1 receive the messages as they arrive. The publisher and subscriber don't know about each other — they only know about the broker and the topic name.
 
+> Demo 1 always uses `test.mosquitto.org` regardless of `.env`.
+> To point at a different broker: `MQTT_BROKER=broker.hivemq.com uv run demo1_hello_mqtt.py --mode publish`
+
 **What to notice:**
 - The subscriber starts before the publisher, yet receives all messages
-- Topic: `meetup/weather/test` — hierarchical, like a file path
-- Connection goes to `test.mosquitto.org` — a public broker, no auth needed
+- Topic: `meetup/weather/hello` — hierarchical, like a file path
+- `test.mosquitto.org` is a public broker: no account, no auth, anyone can publish
 
 ---
 
@@ -73,7 +84,7 @@ Watch Terminal 1 receive the messages as they arrive. The publisher and subscrib
 uv run demo2_cloud_weather.py
 ```
 
-This polls OpenWeatherMap every 60 seconds for Salt Lake City, Denver, and Las Vegas, then publishes each reading to individual topics:
+Polls OpenWeatherMap every 60 seconds for Salt Lake City, Denver, and Las Vegas, then publishes each reading to individual topics:
 
 ```
 meetup/weather/salt_lake_city/temperature
@@ -82,10 +93,16 @@ meetup/weather/denver/temperature
 ...
 ```
 
+> **No API key yet?** Keys take ~2 hrs to activate after signup.
+> To publish to the public broker instead (skip the API entirely for now):
+> ```bash
+> MQTT_BROKER=test.mosquitto.org uv run demo2_cloud_weather.py
+> ```
+
 **What to notice:**
-- One publisher, many topics — subscribers can choose which cities/fields they care about
+- One publisher, many topics — subscribers can choose just the city or field they care about
 - The REST API has no idea MQTT exists; the bridge script is the translator
-- Any MQTT client in the room can subscribe and see the same live data
+- With `retain=True`, any subscriber that joins late still gets the last reading immediately
 
 ---
 
@@ -96,10 +113,13 @@ meetup/weather/denver/temperature
 First, start a local Mosquitto broker:
 
 ```bash
-# Docker (easiest)
+# Podman
+podman run -it -p 1883:1883 eclipse-mosquitto
+
+# Docker
 docker run -it -p 1883:1883 eclipse-mosquitto
 
-# Or Homebrew
+# Homebrew
 brew install mosquitto && mosquitto
 ```
 
@@ -115,8 +135,13 @@ uv run demo3_self_hosted/subscriber.py
 
 The server publishes realistic temperature/humidity data with natural-looking variation (sine wave + noise). The subscriber renders a live-updating terminal dashboard.
 
+> Both scripts hardcode `localhost:1883`. To point at a remote broker:
+> ```bash
+> # edit BROKER at the top of server.py, or set it in the script directly for the demo
+> ```
+
 **What to notice:**
-- The subscriber uses the wildcard topic `home/weather/#` — it catches everything under that prefix
+- The subscriber uses the wildcard topic `home/weather/#` — catches everything under that prefix
 - You own the broker: no data leaves your machine
 - The dashboard updates in-place using `rich` — no web server, no browser
 
@@ -126,25 +151,77 @@ The server publishes realistic temperature/humidity data with natural-looking va
 
 **Concept:** Multiple publishers, one broker, one dashboard — this is the MQTT payoff.
 
-You need three terminals running simultaneously:
+Make sure the local broker is running (from Demo 3), then open three terminals:
 
 ```bash
-# Terminal 1: local simulated sensor (from Demo 3)
+# Terminal 1: local simulated sensor
 uv run demo3_self_hosted/server.py
 
-# Terminal 2: cloud weather bridge (from Demo 2)
+# Terminal 2: cloud weather bridge (publishes to localhost per .env)
 uv run demo2_cloud_weather.py
 
 # Terminal 3: unified dashboard
 uv run demo4_pipeline.py
 ```
 
-The dashboard shows cloud data and local sensor data side-by-side, all sourced from the same broker.
+The dashboard shows cloud data and local sensor data side-by-side, all sourced from the same local broker.
+
+> All three use `MQTT_BROKER=localhost` from `.env`.
+> To show cloud data coming from the public broker instead:
+> ```bash
+> MQTT_BROKER=test.mosquitto.org uv run demo2_cloud_weather.py
+> # then update demo4_pipeline.py TOPICS to point meetup/# at test.mosquitto.org
+> ```
 
 **What to notice:**
 - The two publishers don't know about each other or the dashboard
 - Adding a new data source means writing one new publisher — nothing else changes
-- This is how production IoT systems work: sensors, cloud APIs, and dashboards are fully decoupled
+- This is how production IoT systems work: sensors, APIs, and dashboards are fully decoupled
+
+---
+
+## Node-RED — Visual Flow Editor
+
+**Concept:** See every message move through the pipeline in a visual editor. Node-RED is a flow-based tool where you wire MQTT topics to logic and outputs by drawing connections.
+
+The flows are pre-wired in `node-red/flows.json` — no manual setup at the browser.
+
+First, make sure the local broker is running, then:
+
+```bash
+# Create a shared network so Node-RED can reach the broker by name
+podman network create mqtt-net
+podman network connect mqtt-net mqtt-demo-broker
+
+# Start Node-RED with the pre-built flows
+podman run -d --name node-red \
+  --network mqtt-net \
+  -p 1880:1880 \
+  --user root \
+  -v $(pwd)/node-red:/data \
+  nodered/node-red
+```
+
+Open **http://localhost:1880** — you'll see two parallel pipelines already connected:
+
+```
+[MQTT In: home/weather/#]      → [JSON] → [Format] → [Debug: Local Sensor]
+[MQTT In: meetup/weather/+/all] → [JSON] → [Format] → [Debug: Cloud Data  ]
+```
+
+Start the sensor and cloud bridge, then watch the debug panel on the right side fill up in real time:
+
+```bash
+uv run demo3_self_hosted/server.py   # local sensor
+uv run demo2_cloud_weather.py        # cloud bridge
+```
+
+> To point at a different broker: edit the `Local Mosquitto` config node in the Node-RED UI (double-click any MQTT node → Edit broker).
+
+**What to notice:**
+- The flows are just data — you can export, import, version-control, and share them (that's what `flows.json` is)
+- You can add a new step (filter, transform, alert) by dropping in a node and drawing a wire — no code needed
+- The same broker powering your Python scripts is powering Node-RED simultaneously
 
 ---
 
@@ -200,3 +277,4 @@ mqtt-demo/
 ├── mqtt_weather_meetup.md     # Full theory, discussion prompts, references
 ├── pyproject.toml             # Dependencies (managed by uv)
 └── .env.example               # Config template
+```

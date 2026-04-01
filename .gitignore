@@ -24,3 +24,10 @@ build/
 
 # macOS
 .DS_Store
+
+# Node-RED runtime state (only flows.json should be committed)
+node-red/.config.*
+node-red/settings.js
+node-red/package.json
+node-red/package-lock.json
+node-red/node_modules/
