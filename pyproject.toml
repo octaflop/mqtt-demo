@@ -8,4 +8,5 @@ dependencies = [
     "rich>=13.9.0",
     "python-dotenv>=1.0.0",
     "meshtastic>=2.5.0",
+    "pyserial>=3.5",
 ]

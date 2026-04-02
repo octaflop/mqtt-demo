@@ -11,8 +11,8 @@ A hands-on demo for the Python meetup. We'll go from "what is MQTT?" to a live m
 ```
 [OpenWeatherMap API] ──► [MQTT Broker] ──► [Unified Dashboard]
 [Local Weather Station] ──►      ▲
-[Meshtastic Mesh Radio] ──►      │
-                                 └── (any subscriber can tap in)
+[KB2040 via USB Serial] ──►      │
+[Meshtastic Mesh Radio] ──►      └── (any subscriber can tap in)
 ```
 
 MQTT is a lightweight publish/subscribe protocol used everywhere in IoT — Home Assistant, AWS IoT Core, factory sensors, emergency mesh networks. The broker is the hub: publishers send data to *topics*, subscribers listen to topics. They never talk directly to each other.
@@ -225,6 +225,80 @@ uv run demo2_cloud_weather.py        # cloud bridge
 
 ---
 
+## Demo 5 — KB2040 Hardware Sensor Bridge
+
+**Concept:** A real microcontroller as an MQTT edge device — no WiFi chip needed. The KB2040 runs CircuitPython and streams JSON over USB serial; a host-side bridge publishes it to the broker.
+
+**Hardware required:** [Adafruit KB2040](https://www.adafruit.com/product/5302)
+
+### Board boot states
+
+The KB2040 has two completely different USB modes. Knowing which one you're in is the key to everything:
+
+| Drive mounts as | How to get there | What goes here |
+|-----------------|------------------|----------------|
+| `RPI-RP2` | Double-tap RESET | CircuitPython `.uf2` firmware file |
+| `CIRCUITPY` | Single RESET tap (after firmware is flashed) | `code.py`, `lib/` folder |
+
+`code.py` and libraries will be silently ignored if copied to `RPI-RP2` — that drive only processes `.uf2` files.
+
+### One-time board setup
+
+**Step 1 — Flash CircuitPython** (only needed once):
+
+```bash
+# Double-tap the RESET button → RPI-RP2 mounts
+make flash-kb2040
+# Downloads CircuitPython 9.2.1 UF2 and copies it to the board.
+# Board reboots automatically → CIRCUITPY mounts.
+```
+
+**Step 2 — Install libraries and copy firmware:**
+
+```bash
+# CIRCUITPY is now mounted (single RESET tap if needed)
+make libs-kb2040    # circup installs neopixel into lib/
+make copy-kb2040    # copies kb2040/code.py to the board
+```
+
+The NeoPixel will blink green once per second when running correctly.
+
+### Running the demo
+
+Make sure the local broker is running (from Demo 3), then:
+
+```bash
+# Terminal 1: serial → MQTT bridge (auto-detects the board by USB VID/PID)
+uv run demo5_kb2040.py
+
+# Terminal 2: watch the topic
+mosquitto_sub -h localhost -t "home/sensors/#" -v
+```
+
+Each JSON line from the device becomes a retained message on `home/sensors/kb2040`.
+
+### Development workflow
+
+```bash
+# Edit kb2040/code.py, then:
+make copy-kb2040        # copy once
+
+# Or watch for saves and auto-copy (requires: brew install fswatch):
+make watch-kb2040
+```
+
+CircuitPython reloads `code.py` automatically whenever the file changes on the drive — no manual restart needed.
+
+**What to notice:**
+- CircuitPython is a full Python runtime in ~256 KB — it runs real `.py` files, no compilation step
+- The serial bridge pattern works for *any* microcontroller without WiFi (Arduino, RP2040, etc.)
+- The broker doesn't know or care whether the publisher is a cloud API or a $10 dev board over USB
+- Plug in the board → data flows; unplug it → bridge exits cleanly. Zero broker config changes
+
+> **Optional — connect an analog sensor to A0** (potentiometer, photocell, soil moisture probe, etc.). The `voltage_v` field in the payload will reflect whatever is wired there.
+
+---
+
 ## Bonus — Meshtastic Mesh Radio
 
 **Hardware required:** Meshtastic LoRa device + BME280 sensor (I2C)
@@ -273,6 +347,9 @@ mqtt-demo/
 │   ├── server.py              # Simulated weather station (~79 lines)
 │   └── subscriber.py          # Live terminal dashboard (~93 lines)
 ├── demo4_pipeline.py          # Unified multi-source dashboard (~133 lines)
+├── demo5_kb2040.py            # KB2040 serial → MQTT bridge (~100 lines)
+├── kb2040/
+│   └── code.py                # CircuitPython firmware (flash to the board)
 ├── bonus_meshtastic.py        # Meshtastic mesh → MQTT (~159 lines)
 ├── mqtt_weather_meetup.md     # Full theory, discussion prompts, references
 ├── pyproject.toml             # Dependencies (managed by uv)
